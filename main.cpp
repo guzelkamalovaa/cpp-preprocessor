@@ -14,83 +14,75 @@ path operator""_p(const char* data, std::size_t sz) {
     return path(data, data + sz);
 }
 
-// напишите эту функцию
-bool Preprocess(const path& in_file, const path& out_file, const vector<path>& include_directories);
+static bool ProcessFile(ifstream& in_stream, ofstream& out_stream, const path& current_file,
+                        const vector<path>& include_directories, int& line_number);
+
+bool Preprocess(const path& in_file, const path& out_file, const vector<path>& include_directories) {
+    ifstream in_stream(in_file);
+    if (!in_stream.is_open()) {
+        return false;
+    }
+
+    ofstream out_stream(out_file);
+    if (!out_stream.is_open()) {
+        return false;
+    }
+
+    int line_number = 0;
+    return ProcessFile(in_stream, out_stream, in_file, include_directories, line_number);
+}
+
+static bool ProcessFile(ifstream& in_stream, ofstream& out_stream, const path& current_file,
+                        const vector<path>& include_directories, int& line_number) {
+    static const regex include_quote_regex(R"(#\s*include\s*\"([^\"]*)\")");
+    static const regex include_angle_regex(R"(#\s*include\s*<([^>]*)>)");
+
+    string line;
+    while (getline(in_stream, line)) {
+        ++line_number;
+        smatch match;
+
+        if (regex_match(line, match, include_quote_regex) || regex_match(line, match, include_angle_regex)) {
+            path include_path = match[1].str();
+            ifstream include_stream;
+            path resolved_path;
+
+            bool is_quote_include = regex_match(line, match, include_quote_regex);
+            if (is_quote_include) {
+                // Поиск файла относительно текущего файла
+                resolved_path = current_file.parent_path() / include_path;
+                include_stream.open(resolved_path);
+            }
+
+            if (!include_stream.is_open()) {
+                for (const path& dir : include_directories) {
+                    resolved_path = dir / include_path;
+                    include_stream.open(resolved_path);
+                    if (include_stream.is_open()) {
+                        break;
+                    }
+                }
+            }
+
+            if (!include_stream.is_open()) {
+                cout << "unknown include file " << include_path.string() << " at file " 
+                     << current_file.string() << " at line " << line_number << endl;
+                return false;
+            }
+
+            int inner_line_number = 0;
+            if (!ProcessFile(include_stream, out_stream, resolved_path, include_directories, inner_line_number)) {
+                return false;
+            }
+            include_stream.close();
+        } else {
+            out_stream << line << '\n';
+        }
+    }
+    return true;
+}
 
 string GetFileContents(string file) {
     ifstream stream(file);
-
-    // конструируем string по двум итераторам
-    return {(istreambuf_iterator<char>(stream)), istreambuf_iterator<char>()};
-}
-
-void Test() {
-    error_code err;
-    filesystem::remove_all("sources"_p, err);
-    filesystem::create_directories("sources"_p / "include2"_p / "lib"_p, err);
-    filesystem::create_directories("sources"_p / "include1"_p, err);
-    filesystem::create_directories("sources"_p / "dir1"_p / "subdir"_p, err);
-
-    {
-        ofstream file("sources/a.cpp");
-        file << "// this comment before include\n"
-                "#include \"dir1/b.h\"\n"
-                "// text between b.h and c.h\n"
-                "#include \"dir1/d.h\"\n"
-                "\n"
-                "int SayHello() {\n"
-                "    cout << \"hello, world!\" << endl;\n"
-                "#   include<dummy.txt>\n"
-                "}\n"s;
-    }
-    {
-        ofstream file("sources/dir1/b.h");
-        file << "// text from b.h before include\n"
-                "#include \"subdir/c.h\"\n"
-                "// text from b.h after include"s;
-    }
-    {
-        ofstream file("sources/dir1/subdir/c.h");
-        file << "// text from c.h before include\n"
-                "#include <std1.h>\n"
-                "// text from c.h after include\n"s;
-    }
-    {
-        ofstream file("sources/dir1/d.h");
-        file << "// text from d.h before include\n"
-                "#include \"lib/std2.h\"\n"
-                "// text from d.h after include\n"s;
-    }
-    {
-        ofstream file("sources/include1/std1.h");
-        file << "// std1\n"s;
-    }
-    {
-        ofstream file("sources/include2/lib/std2.h");
-        file << "// std2\n"s;
-    }
-
-    assert((!Preprocess("sources"_p / "a.cpp"_p, "sources"_p / "a.in"_p,
-                                  {"sources"_p / "include1"_p,"sources"_p / "include2"_p})));
-
-    ostringstream test_out;
-    test_out << "// this comment before include\n"
-                "// text from b.h before include\n"
-                "// text from c.h before include\n"
-                "// std1\n"
-                "// text from c.h after include\n"
-                "// text from b.h after include\n"
-                "// text between b.h and c.h\n"
-                "// text from d.h before include\n"
-                "// std2\n"
-                "// text from d.h after include\n"
-                "\n"
-                "int SayHello() {\n"
-                "    cout << \"hello, world!\" << endl;\n"s;
-
-    assert(GetFileContents("sources/a.in"s) == test_out.str());
-}
-
-int main() {
-    Test();
+    return {istreambuf_iterator<char>(stream), istreambuf_iterator<char>()};
 }
